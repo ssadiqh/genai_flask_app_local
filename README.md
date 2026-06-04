@@ -99,9 +99,9 @@ pip install -r requirements.txt
 
 **What gets installed**:
 - `Flask`: Web framework for building the API
-- `langchain-ollama`: Integration with local Qwen
-- `langchain-core`: Core LangChain abstractions
+- `langchain-ollama`: Integration with local Qwen (includes langchain-core)
 - `pydantic`: Data validation and structured outputs
+- `requests`: HTTP client for API calls
 
 ### Step 3: Configuration (`config.py`)
 
