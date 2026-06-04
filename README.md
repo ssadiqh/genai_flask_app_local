@@ -255,6 +255,268 @@ Returns API status
 
 ---
 
+## Complete Request Flow: How It All Works Together
+
+This diagram shows what happens when you send a message:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. BROWSER (JavaScript - static/script.js)                          │
+│    User types: "What is machine learning?"                          │
+│    Clicks Send                                                       │
+└────────────────────────┬────────────────────────────────────────────┘
+                         │ POST /generate
+                         │ {"message": "What is machine learning?", "model": "qwen"}
+                         ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ 2. FLASK SERVER (app.py - routes/generate endpoint)                 │
+│    Receives JSON request                                            │
+│    Validates: ✅ message not empty, ✅ model is qwen                │
+│    Extracts: user_message, model type                               │
+│    Logs: "Processing message from qwen model..."                    │
+│    Measures time: start_time = now                                  │
+└────────────────────────┬────────────────────────────────────────────┘
+                         │ Calls: qwen_response(system_prompt, user_message)
+                         ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ 3. LANGCHAIN PIPELINE (model.py)                                    │
+│                                                                      │
+│    ┌─────────────────────────────────────────────────────────────┐  │
+│    │ STEP 1: PromptTemplate (qwen_template)                      │  │
+│    │ ─────────────────────────────────────                       │  │
+│    │ Formats prompt with special Qwen tokens:                    │  │
+│    │                                                              │  │
+│    │ <|im_start|>system                                           │  │
+│    │ You are an AI assistant...                                   │  │
+│    │ Analyze sentiment (0-100)...                                 │  │
+│    │ [format instructions from JsonOutputParser]                  │  │
+│    │ <|im_end|>                                                   │  │
+│    │ <|im_start|>user                                             │  │
+│    │ What is machine learning?<|im_end|>                          │  │
+│    │ <|im_start|>assistant                                        │  │
+│    └──────────────────────┬──────────────────────────────────────┘  │
+│                           ↓                                          │
+│    ┌─────────────────────────────────────────────────────────────┐  │
+│    │ STEP 2: OllamaLLM (qwen_llm)                                │  │
+│    │ ─────────────────────────────                               │  │
+│    │ Sends HTTP POST to http://localhost:11434                   │  │
+│    │ Model: "qwen2.5:7b"                                         │  │
+│    │ Temperature: 0.3 (from config.py)                           │  │
+│    │ Max tokens: 256 (from config.py)                            │  │
+│    └──────────────────────┬──────────────────────────────────────┘  │
+│                           ↓                                          │
+└───────────────────────────┼──────────────────────────────────────────┘
+                            │
+┌───────────────────────────┼──────────────────────────────────────────┐
+│ 4. OLLAMA SERVER (localhost:11434)                                   │
+│                                                                       │
+│    ┌──────────────────────────────────────────────────────────────┐  │
+│    │ Loads qwen2.5:7b model (7 billion parameters)               │  │
+│    │ Tokenizes: "What is machine learning?" → [What][is]...      │  │
+│    │ Creates embeddings: token → [0.2, -0.5, 0.8, ...]          │  │
+│    │                                                              │  │
+│    │ TRANSFORMER LAYERS (32 iterations):                         │  │
+│    │ Layer 1: Basic relationships                                │  │
+│    │ Layer 2: Phrase understanding                               │  │
+│    │ ...                                                         │  │
+│    │ Layer 32: Deep contextual reasoning                         │  │
+│    │                                                              │  │
+│    │ TOKEN GENERATION (iterative):                               │  │
+│    │ Predicts: "Machine" (confidence: 0.95)                      │  │
+│    │ Predicts: "learning" (confidence: 0.98)                     │  │
+│    │ Predicts: "is" (confidence: 0.92)                           │  │
+│    │ ... continues for up to 256 tokens                          │  │
+│    │                                                              │  │
+│    │ Final output:                                               │  │
+│    │ {"summary": "User asking about ML", "sentiment": 50,        │  │
+│    │  "response": "Machine learning is a subset of AI..."}       │  │
+│    │                                                              │  │
+│    │ ⏱️  Takes ~10-15 seconds total                              │  │
+│    └──────────────────────┬───────────────────────────────────────┘  │
+│                           ↓                                          │
+└───────────────────────────┼──────────────────────────────────────────┘
+                            │ Returns raw JSON text
+                            ↓
+┌───────────────────────────┼──────────────────────────────────────────┐
+│ 5. LANGCHAIN PIPELINE (continued)                                    │
+│                                                                       │
+│    ┌──────────────────────────────────────────────────────────────┐  │
+│    │ STEP 3: JsonOutputParser                                     │  │
+│    │ ──────────────────────────────                               │  │
+│    │ Receives raw text with embedded JSON                         │  │
+│    │ Extracts JSON object                                         │  │
+│    │ Validates against AIResponse schema:                         │  │
+│    │   - summary: must be string ✅                               │  │
+│    │   - sentiment: must be int 0-100 ✅                          │  │
+│    │   - response: must be string ✅                              │  │
+│    │                                                              │  │
+│    │ Returns structured AIResponse:                               │  │
+│    │ {                                                            │  │
+│    │   "summary": "User asking about machine learning",           │  │
+│    │   "sentiment": 50,                                           │  │
+│    │   "response": "Machine learning is a subset of AI..."        │  │
+│    │ }                                                            │  │
+│    └──────────────────────┬───────────────────────────────────────┘  │
+│                           ↓                                          │
+└───────────────────────────┼──────────────────────────────────────────┘
+                            │ Returns to Flask
+                            ↓
+┌───────────────────────────┼──────────────────────────────────────────┐
+│ 6. FLASK SERVER (continued - app.py)                                 │
+│    Receives AIResponse from model.py                                │
+│    Calculates: duration = current_time - start_time                 │
+│    Adds to result: result['duration'] = 11.81 seconds               │
+│    Logs: "Generated response in 11.81 seconds"                      │
+│                                                                      │
+│    Final response object:                                           │
+│    {                                                                │
+│      "summary": "User asking about machine learning",               │
+│      "sentiment": 50,                                               │
+│      "response": "Machine learning is a subset of AI...",           │
+│      "duration": 11.81                                              │
+│    }                                                                │
+└───────────────────────────┬──────────────────────────────────────────┘
+                            │ return jsonify(result)
+                            ↓
+┌───────────────────────────┼──────────────────────────────────────────┐
+│ 7. BROWSER (JavaScript - static/script.js)                          │
+│    Receives JSON response                                           │
+│    Updates UI:                                                      │
+│    - Hides loading indicator                                        │
+│    - Displays summary                                               │
+│    - Shows sentiment score (0-100)                                  │
+│    - Displays AI response                                           │
+│    - Shows response time: "Qwen took 11.81 seconds"                 │
+│    - User can send next message                                     │
+│                                                                      │
+│    Chat now shows:                                                  │
+│    You: "What is machine learning?"                                 │
+│    Qwen: [Summary, sentiment, response, time]                       │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### **Step-by-Step Breakdown**
+
+#### **When Browser Sends Message:**
+```
+1. JavaScript captures user input
+2. Sends POST to /generate with message and model
+3. Shows loading indicator (animated dots)
+```
+
+#### **When Flask Receives Request:**
+```
+1. Validates message is not empty
+2. Validates model is 'qwen'
+3. Defines system prompt (instructions for Qwen)
+4. Records start time
+5. Calls qwen_response() from model.py
+```
+
+#### **When LangChain Processes:**
+```
+1. PromptTemplate formats with Qwen special tokens
+2. OllamaLLM sends to Ollama server
+3. JsonOutputParser validates response structure
+4. Returns AIResponse object
+```
+
+#### **When Ollama Runs Qwen:**
+```
+1. Loads model into GPU/CPU memory
+2. Tokenizes input text
+3. Converts tokens to embeddings (vectors)
+4. Runs through 32 transformer layers
+5. Iteratively predicts next token
+6. Continues until max_tokens reached or natural stop
+7. Returns complete response
+```
+
+#### **When Flask Returns Response:**
+```
+1. Calculates elapsed time
+2. Adds duration to response
+3. Logs processing time
+4. Returns JSON to browser
+```
+
+#### **When Browser Displays:**
+```
+1. JavaScript receives JSON
+2. Hides loading indicator
+3. Adds message to chat history
+4. Displays summary, sentiment, response
+5. Shows response time
+6. Auto-scrolls to latest message
+7. Clears input field
+8. Focuses input for next message
+```
+
+---
+
+### **Key Timings**
+
+```
+Network request:      < 1ms
+Flask validation:     < 1ms
+LangChain setup:      < 1ms
+Ollama processing:    10-15 seconds ⏰ (most time here)
+JsonOutputParser:     < 1ms
+Flask response:       < 1ms
+Browser display:      < 100ms
+
+Total:                ~11-15 seconds
+```
+
+---
+
+### **Error Flow Example**
+
+If something goes wrong:
+
+```
+Browser sends empty message ("")
+          ↓
+Flask catches: if not user_message
+          ↓
+Returns: {"error": "Message cannot be empty"}, 400
+          ↓
+Browser receives error
+          ↓
+JavaScript catches and displays error message
+          ↓
+User can try again
+```
+
+---
+
+### **Configuration Impact**
+
+Same message, different config:
+
+```
+Config 1: temperature=0.3, max_tokens=256
+Message: "Hello"
+Response: "Hello! How can I assist you today?"
+Duration: 11.81s
+Next time same message: Same response (deterministic)
+
+Config 2: temperature=0.9, max_tokens=256
+Message: "Hello"
+Response: "Hey there! How may I help you?"
+Duration: 12.15s
+Next time same message: Different response (creative)
+
+Config 3: temperature=0.3, max_tokens=50
+Message: "Hello"
+Response: "Hello! How can..." (cut off)
+Duration: 8.2s (faster, shorter)
+```
+
+---
+
 ## Running the Application
 
 ### 1. Start Ollama Server
