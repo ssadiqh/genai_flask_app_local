@@ -2,7 +2,7 @@
 
 This is an **adapted version** of the IBM Skills Network course "Build Your First GenAI Application The Right Way" — but using **local Qwen2.5:7b via Ollama** instead of IBM Watsonx.
 
-This tutorial teaches you how to build a production-quality GenAI Flask application step-by-step, with no API keys needed!
+This tutorial teaches you how to build a learning-focused GenAI Flask application with production-style structure, step-by-step, with no API keys needed!
 
 ## 📚 Table of Contents
 
